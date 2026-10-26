@@ -2545,6 +2545,12 @@ function locate(quiet) {
     const c = { lat: pos.coords.latitude, lon: pos.coords.longitude, label: 'Near you', fromGps: true };
     if (quiet && state.center && distM(state.center, c) < 150) return;
     setCenter(c, { needsLabel: true });
+    // Computers without GPS guess from Wi-Fi or the internet connection, which can be miles (or a country) off.
+    const acc = pos.coords.accuracy;
+    if (!quiet && acc > 2000) {
+      const off = state.units === 'mi' ? Math.round(acc / 1609) + ' miles' : Math.round(acc / 1000) + ' km';
+      openLocPanel(`Your device only knows roughly where you are (within about ${off}). If this spot is wrong, type your address or ZIP instead.`);
+    }
   }, err => {
     if (err.code === 1) fail('Location is blocked for this page. Allow it in your browser settings, or type an address.');
     else if (err.code === 3) fail('Finding your location took too long. Try again, or type an address.');
