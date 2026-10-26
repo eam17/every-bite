@@ -256,6 +256,10 @@ a { color: var(--link); }
   box-shadow: 0 0 0 3px var(--accent), 0 2px 8px rgba(0, 0, 0, .3);
 }
 .leaflet-container { font-family: var(--font-body); background: var(--tint); }
+.leaflet-tile-pane { filter: saturate(.7) brightness(1.03); }
+@media (prefers-color-scheme: dark) {
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(.5) brightness(.85) contrast(.9); }
+}
 .leaflet-top.leaflet-right { top: 108px; }
 .leaflet-bar a, .leaflet-bar a:hover { background: var(--card); color: var(--ink); border-bottom-color: var(--line); }
 .leaflet-bar { border: 1px solid var(--line) !important; box-shadow: var(--shadow) !important; }
@@ -731,7 +735,7 @@ a { color: var(--link); }
       </div>
       <p>Every place comes from OpenStreetMap, the map anyone can edit, so nothing is ranked, paid for, or left out. A place with no cuisine listed only matches your search by its name. Missing a spot or wrong info? Tap Fix info on a place, or <a href="https://www.openstreetmap.org/edit" target="_blank" rel="noopener">add it to OpenStreetMap</a>, and it will show up here shortly.</p>
       <p>Drive times are estimates without traffic, from the free OSRM routing service run by FOSSGIS, for the nearest places in your list.</p>
-      <p>Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> · Map tiles © CARTO · Search by Overpass API · Addresses by Nominatim · Routes by <a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noopener">OSRM / FOSSGIS</a></p>
+      <p>Data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> · Map tiles by OpenStreetMap ·Search by Overpass API · Addresses by Nominatim · Routes by <a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noopener">OSRM / FOSSGIS</a></p>
     </footer>
   </main>
 </div>
@@ -1871,11 +1875,11 @@ function initMap() {
 }
 function setTiles() {
   if (!map) return;
-  const style = darkMQ.matches ? 'dark_all' : 'light_all';
   if (tiles) map.removeLayer(tiles);
-  tiles = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}{r}.png`, {
-    subdomains: 'abcd', maxZoom: 20,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
+  // OpenStreetMap's own tiles need no key; dark mode is a CSS filter on the tile pane.
+  tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxNativeZoom: 19, maxZoom: 20,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'
   }).addTo(map);
   tiles.bringToBack();
 }
