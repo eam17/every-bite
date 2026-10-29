@@ -384,6 +384,7 @@ a { color: var(--link); }
 .want-btn[aria-pressed="true"] path { fill: currentColor; }
 .why { display: flex; align-items: baseline; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--link); }
 .why svg { flex: none; align-self: center; }
+.on-list.skipped { color: var(--muted); }
 .on-list { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--want); }
 .place-info { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; font-size: 13.5px; min-width: 0; }
 .hours { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
@@ -762,6 +763,7 @@ a { color: var(--link); }
         <button type="button" data-preset="nodislike">Hide ones we disliked</button>
         <button type="button" data-preset="mylist">Everywhere we’ve been</button>
         <button type="button" data-preset="split">One liked it, one didn’t</button>
+        <button type="button" data-preset="skipped">Not for us</button>
       </div>
     </section>
     <section class="sheet-sec" aria-labelledby="groupsTitle">
@@ -1187,7 +1189,7 @@ function cleanRatings(en) {
   return { ratings, rUpd };
 }
 function sanitizeLists(data) {
-  const out = { log: {}, want: {}, tomb: {} };
+  const out = { log: {}, want: {}, skip: {}, tomb: {} };
   if (!data || typeof data !== 'object') { out.shared = cleanShared(null); return out; }
   const isDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
   for (const [id, en] of Object.entries(data.log && typeof data.log === 'object' ? data.log : {})) {
@@ -1210,8 +1212,13 @@ function sanitizeLists(data) {
       byDev: typeof en.byDev === 'string' && /^[a-z0-9]{6,16}$/.test(en.byDev) ? en.byDev : ''
     };
   }
+  for (const [id, en] of Object.entries(data.skip && typeof data.skip === 'object' ? data.skip : {})) {
+    const snap = en && cleanSnap(en.snap);
+    if (!/^[nwr]\d+$/.test(id) || !snap) continue;
+    out.skip[id] = { added: isDate(en.added) ? en.added : '', updated: Number(en.updated) || 0, snap };
+  }
   for (const [k, t] of Object.entries(data.tomb && typeof data.tomb === 'object' ? data.tomb : {})) {
-    if (/^(log|want):[nwr]\d+$/.test(k) && Number.isFinite(Number(t))) out.tomb[k] = Number(t);
+    if (/^(log|want|skip):[nwr]\d+$/.test(k) && Number.isFinite(Number(t))) out.tomb[k] = Number(t);
   }
   out.shared = cleanShared(data.shared);
   return out;
@@ -1232,9 +1239,9 @@ function listText(names) {
   return names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
 }
 function mergeLists(a, b, nowMs) {
-  const out = { log: {}, want: {}, tomb: {} };
+  const out = { log: {}, want: {}, skip: {}, tomb: {} };
   for (const src of [a.tomb || {}, b.tomb || {}]) for (const [k, t] of Object.entries(src)) out.tomb[k] = Math.max(out.tomb[k] || 0, t);
-  for (const list of ['log', 'want']) {
+  for (const list of ['log', 'want', 'skip']) {
     const A = a[list] || {}, B = b[list] || {};
     for (const id of new Set([...Object.keys(A), ...Object.keys(B)])) {
       const x = A[id], y = B[id];
@@ -1255,6 +1262,11 @@ function mergeLists(a, b, nowMs) {
     }
   }
   for (const id of Object.keys(out.want)) if (out.log[id]) delete out.want[id]; // tried beats want to try
+  for (const id of Object.keys(out.skip)) {
+    // Tried beats "not for us"; between want to try and "not for us", the newer choice wins
+    if (out.log[id] || (out.want[id] && (out.want[id].updated || 0) > (out.skip[id].updated || 0))) delete out.skip[id];
+    else delete out.want[id];
+  }
   out.shared = mergeShared(a.shared, b.shared);
   const yearAgo = (nowMs || Date.now()) - 365 * 864e5;
   for (const [k, t] of Object.entries(out.tomb)) if (t < yearAgo) delete out.tomb[k];
@@ -1330,19 +1342,23 @@ const GROUPS = [
   { k: 'want', label: 'On my want-to-try list' },
   { k: 'new', label: 'Other places we haven’t tried' },
   { k: 'unrated', label: 'Tried, not rated yet' },
-  { k: 'r5', r: 5 }, { k: 'r4', r: 4 }, { k: 'r3', r: 3 }, { k: 'r2', r: 2 }, { k: 'r1', r: 1 }
+  { k: 'r5', r: 5 }, { k: 'r4', r: 4 }, { k: 'r3', r: 3 }, { k: 'r2', r: 2 }, { k: 'r1', r: 1 },
+  { k: 'skip', label: 'Not for us (we’ll never try these)' }
 ];
 const ALL_GROUPS = GROUPS.map(g => g.k);
+// What shows when nothing is filtered: everything except places you've marked "not for us"
+const DEFAULT_GROUPS = ALL_GROUPS.filter(k => k !== 'skip');
 const TRIED_GROUPS = ['unrated', 'r5', 'r4', 'r3', 'r2', 'r1'];
 const PRESETS = {
-  all: { mine: ALL_GROUPS, outside: false },
+  all: { mine: DEFAULT_GROUPS, outside: false },
   new: { mine: ['want', 'new'], outside: false },
   wantlist: { mine: ['want'], outside: true },
   suggest: { mine: ['want', 'new'], outside: false, sort: 'foryou' },
   fav: { mine: ['r5', 'r4'], outside: false },
   nodislike: { mine: ['want', 'new', 'unrated', 'r5', 'r4', 'r3'], outside: false },
   mylist: { mine: TRIED_GROUPS, outside: true, sort: 'recent' },
-  split: { mine: TRIED_GROUPS, outside: true, agree: ['split'] }
+  split: { mine: TRIED_GROUPS, outside: true, agree: ['split'] },
+  skipped: { mine: ['skip'], outside: true }
 };
 const SORTS = ['near', 'foryou', 'rating', 'recent', 'az'];
 const AGREE_KEYS = ['both', 'a', 'b', 'split', 'neither'];
@@ -1382,13 +1398,13 @@ const FEATURE_KEYS = FEATURES.map(f => f.k);
 let savedMine = store.get('mine', null);
 if (!Array.isArray(savedMine)) {
   const old = store.get('show', 'all');
-  savedMine = old === 'new' ? ['want', 'new'] : old === 'tried' ? TRIED_GROUPS : ALL_GROUPS;
+  savedMine = old === 'new' ? ['want', 'new'] : old === 'tried' ? TRIED_GROUPS : DEFAULT_GROUPS;
 } else if (savedMine.includes('new') && !savedMine.includes('want') && !store.get('hasWantGroup', false)) {
   savedMine.push('want'); // the want-to-try list is new; places on it were "not tried" before
 }
 store.set('hasWantGroup', true);
 savedMine = savedMine.filter(k => ALL_GROUPS.includes(k));
-if (!savedMine.length) savedMine = ALL_GROUPS;
+if (!savedMine.length) savedMine = DEFAULT_GROUPS;
 
 const state = {
   units: store.get('units', prefersMiles ? 'mi' : 'km'),
@@ -1419,11 +1435,13 @@ const state = {
 const weekCache = new Map();
 
 /* Your lists. Tried: { osmId: { at, ratings: { a, b } 0-5, rUpd, price 0-4, note, updated, snap } }.
-   Want to try: { osmId: { added, updated, snap } }. snap = { lat, lon, t, u } so a place shows even when it's not in the current search. */
+   Want to try: { osmId: { added, updated, snap } }. Not for us (places you'll never try): same shape as want to try. snap = { lat, lon, t, u } so a place shows even when it's not in the current search. */
 let log = store.get('log', {});
 if (!log || typeof log !== 'object' || Array.isArray(log)) log = {};
 let want = store.get('want', {});
 if (!want || typeof want !== 'object' || Array.isArray(want)) want = {};
+let skip = store.get('skip', {});
+if (!skip || typeof skip !== 'object' || Array.isArray(skip)) skip = {};
 // Who's using this device, and the shared settings synced through the repo
 let deviceId = store.get('deviceId', '');
 if (!/^[a-z0-9]{6,16}$/.test(deviceId)) {
@@ -1455,7 +1473,8 @@ let openReview = null;
 let lastV = null;
 const logCount = () => Object.keys(log).length;
 const wantCount = () => Object.keys(want).length;
-function groupOf(id) { const en = log[id]; const r = avgRating(en); return en ? (r ? 'r' + Math.round(r) : 'unrated') : (want[id] ? 'want' : 'new'); }
+const skipCount = () => Object.keys(skip).length;
+function groupOf(id) { const en = log[id]; const r = avgRating(en); return en ? (r ? 'r' + Math.round(r) : 'unrated') : skip[id] ? 'skip' : want[id] ? 'want' : 'new'; }
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1480,7 +1499,7 @@ function agoText(ms) {
 function touch(en, starsOnly) { const t = Date.now(); en.updated = t; if (!starsOnly) en.eUpd = t; }
 let askedPersist = false;
 function saveLists(fromSync) {
-  const ok = store.set('log', log) && store.set('want', want) && store.set('tomb', tomb) && store.set('shared', shared);
+  const ok = store.set('log', log) && store.set('want', want) && store.set('skip', skip) && store.set('tomb', tomb) && store.set('shared', shared);
   if (ok) setLogInfo();
   else setLogInfo('Couldn’t save your lists. This browser is blocking storage, which usually means private browsing.', true);
   // Ask the browser not to clear this app's data when the phone runs low on space
@@ -1600,11 +1619,12 @@ function hoursOf(p, now) {
   return p._h;
 }
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function defaultMine() { return state.mine.size === DEFAULT_GROUPS.length && DEFAULT_GROUPS.every(k => state.mine.has(k)); }
 function isFiltered() {
-  return state.mine.size !== ALL_GROUPS.length || state.outside || state.hideClosed || state.hideStale || state.feats.size > 0 || state.prices.size > 0 || state.agree.size > 0;
+  return !defaultMine() || state.outside || state.hideClosed || state.hideStale || state.feats.size > 0 || state.prices.size > 0 || state.agree.size > 0;
 }
 function filterCount() {
-  return (state.mine.size !== ALL_GROUPS.length ? 1 : 0) + (state.outside ? 1 : 0) + (state.hideClosed ? 1 : 0) +
+  return (defaultMine() ? 0 : 1) + (state.outside ? 1 : 0) + (state.hideClosed ? 1 : 0) +
     (state.hideStale ? 1 : 0) + state.feats.size + (state.prices.size ? 1 : 0) + (state.agree.size ? 1 : 0);
 }
 function snapOf(p) { return { lat: p.lat, lon: p.lon, t: p.t, u: p.u || '' }; }
@@ -1693,9 +1713,9 @@ function toPlaces(elements, center) {
 // Places on your lists come from the latest search when they're in it, otherwise from the copy saved with them
 function savedPlaces() {
   const out = [];
-  const ids = new Set([...Object.keys(log), ...Object.keys(want)]);
+  const ids = new Set([...Object.keys(log), ...Object.keys(want), ...Object.keys(skip)]);
   for (const id of ids) {
-    const s = (log[id] && log[id].snap) || (want[id] && want[id].snap);
+    const s = (log[id] && log[id].snap) || (want[id] && want[id].snap) || (skip[id] && skip[id].snap);
     const p = state.byId.get(id) || (s && makePlace(id, s.lat, s.lon, s.t || {}, state.center, s.u));
     if (p) out.push(p);
   }
@@ -1908,8 +1928,8 @@ function markerStyle(id, selected) {
   if (!pal) pal = palette();
   const en = log[id];
   const r = en ? Math.round(avgRating(en)) : 0;
-  const fill = !en ? (want[id] ? pal.want : pal.accent) : !r ? pal.ink : r >= 4 ? pal.open : r === 3 ? pal.muted : pal.closed;
-  return { radius: selected ? 10 : 6.5, weight: selected ? 3 : 1.5, color: pal.stroke, fillColor: fill, fillOpacity: 1 };
+  const fill = !en ? (skip[id] ? pal.muted : want[id] ? pal.want : pal.accent) : !r ? pal.ink : r >= 4 ? pal.open : r === 3 ? pal.muted : pal.closed;
+  return { radius: selected ? 10 : 6.5, weight: selected ? 3 : 1.5, color: pal.stroke, fillColor: fill, fillOpacity: !en && skip[id] ? 0.45 : 1 };
 }
 function updateMarker(id) {
   const m = markers.get(id);
@@ -2130,16 +2150,18 @@ function renderSummary(v) {
   const noun = n === 1 ? 'place' : 'places';
   const m = state.mine;
   const onlyWant = m.size === 1 && m.has('want');
-  const onlyUntried = !onlyWant && [...m].every(k => k === 'want' || k === 'new');
-  const onlyTried = !m.has('new') && !m.has('want');
+  const onlySkip = m.size === 1 && m.has('skip');
+  const onlyUntried = !onlyWant && !onlySkip && [...m].every(k => k === 'want' || k === 'new' || k === 'skip');
+  const onlyTried = !m.has('new') && !m.has('want') && !m.has('skip');
   let line;
   if (q) line = `${noun} for “${q}”`;
   else if (onlyWant) line = `${noun} on your want-to-try list`;
+  else if (onlySkip) line = `${noun} you marked “not for us”`;
   else if (onlyUntried) line = `${noun} you haven’t tried`;
   else if (onlyTried && state.agree.size === 1 && state.agree.has('split')) line = `${noun} one of you liked and one didn’t`;
   else if (onlyTried) line = `${noun} you’ve tried`;
   else line = `${isFiltered() || state.cats.size ? '' : 'food '}${noun}`;
-  const everywhere = state.outside && (onlyTried || onlyWant);
+  const everywhere = state.outside && (onlyTried || onlyWant || onlySkip);
   if (!everywhere) line += ` within ${r}`;
   el.count.textContent = n.toLocaleString();
   el.countLine.textContent = line;
@@ -2237,6 +2259,9 @@ function reviewHtml(p, en, pre) {
 }
 function mineHtml(p, pre) {
   const en = log[p.id];
+  if (!en && skip[p.id]) {
+    return `<div class="on-list skipped"><span>Not for us</span><button type="button" class="link-btn" data-skip>Undo</button></div>`;
+  }
   if (!en) {
     const w = want[p.id];
     if (!w) return '';
@@ -2292,6 +2317,7 @@ function rowHtml(p, now, pre) {
     `<a href="${esc(dirUrl(p))}" target="_blank" rel="noopener">Directions</a>` +
     (web ? `<a href="${esc(web)}" target="_blank" rel="noopener">Website</a>` : '') +
     (tel ? `<a href="tel:${esc(tel)}">Call</a>` : '') +
+    (en || skip[p.id] ? '' : `<button type="button" class="link-btn" data-skip aria-label="Not for us, hide ${esc(name)}">Not for us</button>`) +
     `<a class="fix" href="${esc(fixUrl(p))}" target="_blank" rel="noopener">Fix info</a></div></li>`;
 }
 function renderList(v) {
@@ -2304,8 +2330,9 @@ function renderList(v) {
   }
   if (!v.matched.length) {
     if (!state.mine.size) { el.list.innerHTML = '<li class="empty">Every option under “Show these places” is off. Open Filters to turn some back on.</li>'; return; }
+    if (state.mine.size === 1 && state.mine.has('skip') && !skipCount()) { el.list.innerHTML = '<li class="empty">Nothing marked “not for us” yet. Tap “Not for us” on a place you’ll never try to hide it.</li>'; return; }
     if (state.mine.size === 1 && state.mine.has('want') && !wantCount()) { el.list.innerHTML = '<li class="empty">Your want-to-try list is empty. Tap the bookmark on any place to add it.</li>'; return; }
-    if (!state.mine.has('new') && !state.mine.has('want') && !logCount()) { el.list.innerHTML = '<li class="empty">You haven’t marked any places yet. After you eat somewhere, tap the circle next to it and give it a rating.</li>'; return; }
+    if (!state.mine.has('new') && !state.mine.has('want') && !state.mine.has('skip') && !logCount()) { el.list.innerHTML = '<li class="empty">You haven’t marked any places yet. After you eat somewhere, tap the circle next to it and give it a rating.</li>'; return; }
     const tips = [];
     if (state.query.trim()) tips.push('try a different word');
     tips.push('pick a bigger distance');
@@ -2451,8 +2478,9 @@ function applyResults(elements, c, key, savedAt) {
   for (const p of state.places) {
     if (log[p.id]) { log[p.id].snap = snapOf(p); fresher = true; }
     if (want[p.id]) { want[p.id].snap = snapOf(p); fresher = true; }
+    if (skip[p.id]) { skip[p.id].snap = snapOf(p); fresher = true; }
   }
-  if (fresher) { store.set('log', log); store.set('want', want); }
+  if (fresher) { store.set('log', log); store.set('want', want); store.set('skip', skip); }
   state.fetchedKey = key;
   state.savedAt = savedAt;
   if (keepSel && !placeFor(keepSel)) { state.selectedId = null; state.surpriseId = null; }
@@ -2716,7 +2744,7 @@ el.presets.addEventListener('click', e => {
   render();
 });
 function resetFilters() {
-  state.mine = new Set(ALL_GROUPS);
+  state.mine = new Set(DEFAULT_GROUPS);
   state.outside = false;
   state.feats.clear();
   state.prices.clear();
@@ -2776,6 +2804,7 @@ function toggleTry(id) {
   if (!log[id]) {
     log[id] = { at: todayStr(), ratings: { a: 0, b: 0 }, rUpd: { a: 0, b: 0 }, price: 0, note: '', updated: Date.now(), eUpd: Date.now(), snap: snapOf(p) };
     if (want[id]) { delete want[id]; bury('want', id); } // tried now, so it comes off the want-to-try list
+    if (skip[id]) { delete skip[id]; bury('skip', id); }
     openReview = id;
     saveLists();
   } else {
@@ -2791,6 +2820,7 @@ function toggleWant(id) {
   if (!p || log[id]) return;
   if (want[id]) { delete want[id]; bury('want', id); }
   else {
+    if (skip[id]) { delete skip[id]; bury('skip', id); }
     want[id] = { added: todayStr(), updated: Date.now(), snap: snapOf(p), by: meSlot, byDev: deviceId };
     seenWant.add(id);
     saveSeen();
@@ -2799,6 +2829,22 @@ function toggleWant(id) {
   updateRow(id);
   updateMarker(id);
   el.legend.hidden = !(logCount() || wantCount()) || !map;
+}
+// "Not for us": a place you'll never try. It hides from the default view but stays one tap away under Filters.
+function toggleSkip(id) {
+  const p = placeFor(id);
+  if (!p || log[id]) return;
+  let msg;
+  if (skip[id]) { delete skip[id]; bury('skip', id); msg = `${displayName(p)} is back in your results.`; }
+  else {
+    if (want[id]) { delete want[id]; bury('want', id); }
+    skip[id] = { added: todayStr(), updated: Date.now(), snap: snapOf(p) };
+    msg = state.mine.has('skip') ? '' : `Hid ${displayName(p)}. Find it again under Filters › Not for us.`;
+  }
+  saveLists();
+  if (state.selectedId === id && !state.mine.has(groupOf(id))) deselect();
+  render();
+  if (msg) setStatus('info', msg);
 }
 function syncRating(id) {
   const en = log[id];
@@ -2850,6 +2896,7 @@ function onRowClick(e) {
   }
   if (e.target.closest('[data-menu]')) { const p = placeFor(id); if (p) openViewer(p); return; }
   if (e.target.closest('[data-want]')) { toggleWant(id); return; }
+  if (e.target.closest('[data-skip]')) { toggleSkip(id); return; }
   if (e.target.closest('[data-try]')) { toggleTry(id); return; }
   if (e.target.closest('[data-edit]')) { flushNote(); openReview = id; updateRow(id); return; }
   const rb = e.target.closest('[data-rate]');
@@ -2919,7 +2966,7 @@ for (const box of [el.list, el.cardList]) {
 /* ---------- backup ---------- */
 el.exportLog.addEventListener('click', () => {
   flushNote();
-  const data = { app: 'every-bite', version: 4, exported: new Date().toISOString(), log, want, tomb };
+  const data = { app: 'every-bite', version: 4, exported: new Date().toISOString(), log, want, skip, tomb };
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
@@ -2933,19 +2980,19 @@ el.exportLog.addEventListener('click', () => {
 el.importBtn.addEventListener('click', () => el.importLog.click());
 // Bring in lists from a file or from GitHub: newest version of each place wins, deletions carry over
 function adoptLists(incoming, fromSync) {
-  const before = canonJSON({ log, want, tomb, shared });
-  const merged = mergeLists({ log, want, tomb, shared }, incoming);
+  const before = canonJSON({ log, want, skip, tomb, shared });
+  const merged = mergeLists({ log, want, skip, tomb, shared }, incoming);
   let added = 0;
-  for (const list of ['log', 'want']) {
+  for (const list of ['log', 'want', 'skip']) {
     for (const [id, en] of Object.entries(merged[list])) {
-      const mine = (list === 'log' ? log : want)[id];
+      const mine = (list === 'log' ? log : list === 'want' ? want : skip)[id];
       if (!mine || (en.updated || 0) > (mine.updated || 0)) added++;
     }
   }
   const iconsBefore = shared.icons;
-  log = merged.log; want = merged.want; tomb = merged.tomb; shared = merged.shared;
+  log = merged.log; want = merged.want; skip = merged.skip; tomb = merged.tomb; shared = merged.shared;
   if (shared.icons !== iconsBefore) renderPair();
-  const changed = canonJSON({ log, want, tomb, shared }) !== before;
+  const changed = canonJSON({ log, want, skip, tomb, shared }) !== before;
   if (changed) {
     if (openReview && !log[openReview]) openReview = null;
     saveLists(fromSync);
@@ -2965,7 +3012,7 @@ el.importLog.addEventListener('change', async () => {
   if (!f) return;
   try {
     const data = JSON.parse(await f.text());
-    if (!data || typeof data !== 'object' || (typeof data.log !== 'object' && typeof data.want !== 'object')) throw new Error('not a backup');
+    if (!data || typeof data !== 'object' || (typeof data.log !== 'object' && typeof data.want !== 'object' && typeof data.skip !== 'object')) throw new Error('not a backup');
     flushNote();
     const { added } = adoptLists(sanitizeLists(data), false);
     setLogInfo(added ? `Restored ${added.toLocaleString()} place${added === 1 ? '' : 's'} from your backup.` : 'Your lists already had everything in that backup.');
@@ -3033,7 +3080,7 @@ async function readRemote() {
   try { return { data: JSON.parse(text), sha: meta.sha }; } catch (e) { throw syncProblem(null, 'bad-file'); }
 }
 async function writeRemote(sha) {
-  const body = { message: 'Update Every Bite lists', content: toB64(JSON.stringify({ app: 'every-bite', version: 5, updated: new Date().toISOString(), log, want, tomb, shared }, null, 1)) };
+  const body = { message: 'Update Every Bite lists', content: toB64(JSON.stringify({ app: 'every-bite', version: 5, updated: new Date().toISOString(), log, want, skip, tomb, shared }, null, 1)) };
   if (sha) body.sha = sha;
   const res = await gh(`/repos/${sync.repo}/contents/${encodeURIComponent(SYNC_FILE)}`, {
     method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' }
@@ -3056,8 +3103,8 @@ async function syncNow() {
       const theirs = remote.data ? sanitizeLists(remote.data) : null;
       if (theirs) adoptLists(theirs, true);
       // Only save to GitHub when this device has something GitHub doesn't
-      if (theirs && canonJSON({ log, want, tomb, shared }) === canonJSON(mergeLists(theirs, theirs))) break;
-      if (!theirs && !logCount() && !wantCount() && !Object.keys(tomb).length && !shared.iconsUpdated) break;
+      if (theirs && canonJSON({ log, want, skip, tomb, shared }) === canonJSON(mergeLists(theirs, theirs))) break;
+      if (!theirs && !logCount() && !wantCount() && !skipCount() && !Object.keys(tomb).length && !shared.iconsUpdated) break;
       if (await writeRemote(remote.sha)) break;
     }
     sync.lastAt = Date.now();
